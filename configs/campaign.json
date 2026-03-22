@@ -1,0 +1,21 @@
+{
+    "random_state": 69, 
+    "date_to": "2019-03-20",
+    "extract": "serving_extract_config.json",
+    "transform": [
+        {
+            "type": "pipeline_pickle",
+            "path": "serving_transform_pipeline.pickle"
+        },
+        {
+            "type": "model_apply",
+            "model_path": "uplift_model.pickle",
+            "col_result": "uplift_score"
+        }
+    ],
+    "selection": {
+        "score_column": "uplift_score",
+        "threshold": 0.0,
+        "description": "Select clients with positive predicted CATE (uplift_score > 0)"
+    }
+}

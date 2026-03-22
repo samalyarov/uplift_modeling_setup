@@ -1,0 +1,9 @@
+[
+    {"name": "receipts_agg",     "args": {"delta": 60}},
+    {"name": "receipts_agg",     "args": {"delta": 15}},
+    {"name": "receipts_agg",     "args": {"delta": 250}},
+    {"name": "recency_global",   "args": {}},
+    {"name": "purchase_trend",   "args": {"delta_short": 30, "delta_long": 120}},
+    {"name": "demographics",     "args": {}},
+    {"name": "campaign_history", "args": {}}
+]
