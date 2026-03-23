@@ -221,7 +221,7 @@ def run_campaign(
         mlflow.log_param("date_to", run_date)
         mlflow.log_param("config_path", config_path)
         mlflow.log_param("threshold", selection_cfg["threshold"])
-        mlflow.log_param("score_column", selection_cfg["score-column"])
+        mlflow.log_param("score_column", selection_cfg["score_column"])
         mlflow.log_param("n_extract_calcers", len(extract_cfg))
 
         # execute the full pipeline
@@ -245,7 +245,7 @@ def run_campaign(
             mlflow.log_metric("mean_uplift", float(features[score_col].mean()))
             mlflow.log_metric("median_uplift", float(features[score_col].median()))
             mlflow.log_metric("std_uplift", float(features[score_col].std()))
-            mlflow.log_metric("pct_positive"), float((features[score_col] > 0).mean() * 100)
+            mlflow.log_metric("pct_positive", float((features[score_col] > 0).mean() * 100))
         mlflow.log_metric("n_total", len(features))
         mlflow.log_metric("n_selected", len(selected))
         mlflow.log_metric("selection_rate", len(selected) / len(features) * 100)

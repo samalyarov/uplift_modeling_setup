@@ -1,5 +1,5 @@
 {
-    "random_state": 69, 
+    "random_state": 42,
     "date_to": "2019-03-20",
     "extract": "serving_extract_config.json",
     "transform": [

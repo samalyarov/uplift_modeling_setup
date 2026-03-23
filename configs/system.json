@@ -5,7 +5,7 @@
     "artifacts_root_path": "artifacts",
     "runs_root_path": "runs",
     "mlflow": {
-        "tracking_url": "http://127.0.0.1:5000",
+        "tracking_uri": "http://127.0.0.1:5000",
         "experiment_name": "cunning-fox-uplift"
     }
 }

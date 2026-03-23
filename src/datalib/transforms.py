@@ -22,7 +22,7 @@ class LocationEncoder(skbase.BaseEstimator, skbase.TransformerMixin):
         self.encoder_ = skpreprocessing.OneHotEncoder(
             sparse_output=False, handle_unknown="ignore"
         )
-        self.encoder_.fit(data["location"])
+        self.encoder_.fit(data[["location"]])
         return self
     
     def transform(self, data: pd.DataFrame, y=None) -> pd.DataFrame:
@@ -30,9 +30,9 @@ class LocationEncoder(skbase.BaseEstimator, skbase.TransformerMixin):
         cols = [
             f"{self.prefix}__{v}" for v in self.encoder_.categories_[0]
         ]
-        df_enc = pd.DataFrame(encoded, column=cols, index=data.index)
+        df_enc = pd.DataFrame(encoded, columns=cols, index=data.index)
         result = pd.concat([data, df_enc], axis=1)
-        result = result.drop(column=["location"], errors="ignore")
+        result = result.drop(columns=["location"], errors="ignore")
         return result
     
 class FillNaTransformer(skbase.BaseEstimator, skbase.TransformerMixin):

@@ -2,9 +2,10 @@
 Utility functions for the project, common I/O helpers
 """
 
+from __future__ import annotations
+
 import json
 import pickle
-from __future__ import annotations
 
 def load_pickle(path: str):
     with open(path, "rb") as f:

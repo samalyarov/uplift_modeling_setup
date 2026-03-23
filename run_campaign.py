@@ -29,7 +29,7 @@ def main():
         help="Register as a Prefect deployment and serve (long-running).",
     )
     parser.add_argument("--config", default="configs/campaign.json")
-    parser.add_argument("--system-confg", default="configs/system.json")
+    parser.add_argument("--system-config", default="configs/system.json")
     parser.add_argument("--date-to", default=None)
     parser.add_argument("-o", "--output", default="runs/submission.csv")
     args = parser.parse_args()

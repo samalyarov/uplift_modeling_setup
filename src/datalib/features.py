@@ -63,6 +63,9 @@ class ReceiptsAggCalcer:
             / (agg["txn_count"] - 1),
             np.nan
         )
+        agg["recency" + suffix] = (
+            (dt_to - agg["date_max"]).dt.total_seconds() / (24 * 3600)
+        )
 
         # Rename columns with suffix
         rename = {
@@ -145,8 +148,8 @@ class DemographicsCalcer:
 
 class CampaignHistoryCalcer:
     """
-    Features derived from past campaign participation
-    Binary flas: was the customer ever targeted before?
+    Features derived from past campaign participation.
+    Binary flag: was the customer ever targeted before?
     """
 
     name = "campaign_history"
@@ -165,7 +168,152 @@ class CampaignHistoryCalcer:
             was_in_target=("target_group_flag", "max")
         ).reset_index()
         return agg
-    
+
+
+# ---------------------------------------------------------------------------
+# Day-of-week features
+# ---------------------------------------------------------------------------
+
+class DayOfWeekCalcer:
+    """Distribution of purchases across days of the week before 'date_to'."""
+
+    name = "day_of_week"
+
+    def __init__(self, date_to: datetime.date):
+        self.date_to = date_to
+
+    def compute(self, engine: Engine) -> pd.DataFrame:
+        receipts = engine.get_table("receipts").copy()
+        receipts["date"] = pd.to_datetime(receipts["date"])
+        dt_to = pd.Timestamp(self.date_to)
+        receipts = receipts.loc[receipts["date"] < dt_to]
+
+        receipts["dow"] = receipts["date"].dt.dayofweek  # 0=Mon, 6=Sun
+
+        # Share of purchases per day of week
+        dow_counts = (
+            receipts.groupby(["customer_id", "dow"])
+            .size()
+            .unstack(fill_value=0)
+        )
+        total = dow_counts.sum(axis=1)
+        dow_share = dow_counts.div(total, axis=0)
+        dow_share.columns = [f"dow_share_{int(c)}" for c in dow_share.columns]
+
+        # Most frequent purchase day
+        mode_dow = receipts.groupby("customer_id")["dow"].agg(
+            lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else -1
+        ).rename("mode_dow")
+
+        # Weekend share (Sat=5, Sun=6)
+        receipts["is_weekend"] = receipts["dow"].isin([5, 6]).astype(int)
+        weekend_share = (
+            receipts.groupby("customer_id")["is_weekend"]
+            .mean()
+            .rename("weekend_purchase_share")
+        )
+
+        result = dow_share.join(mode_dow).join(weekend_share).reset_index()
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Average cheque by city
+# ---------------------------------------------------------------------------
+
+class AvgCityChequeCalcer:
+    """Average purchase sum (cheque) by city — relative to customer's own average."""
+
+    name = "avg_city_cheque"
+
+    def __init__(self, date_to: datetime.date):
+        self.date_to = date_to
+
+    def compute(self, engine: Engine) -> pd.DataFrame:
+        receipts = engine.get_table("receipts").copy()
+        customers = engine.get_table("customers")[["customer_id", "location"]].copy()
+        receipts["date"] = pd.to_datetime(receipts["date"])
+        dt_to = pd.Timestamp(self.date_to)
+        receipts = receipts.loc[receipts["date"] < dt_to]
+
+        # Merge receipts with customer location
+        r = receipts.merge(customers, on="customer_id", how="left")
+
+        # City-level average cheque
+        city_avg = r.groupby("location")["purchase_sum"].mean().rename("city_avg_cheque")
+
+        # Customer-level average cheque
+        cust_avg = r.groupby("customer_id")["purchase_sum"].mean().rename("customer_avg_cheque")
+        cust_loc = r.groupby("customer_id")["location"].first()
+
+        result = pd.DataFrame({"customer_avg_cheque": cust_avg, "location": cust_loc})
+        result = result.join(city_avg, on="location")
+
+        # Relative cheque: customer vs city average
+        result["cheque_vs_city"] = np.where(
+            result["city_avg_cheque"] > 0,
+            result["customer_avg_cheque"] / result["city_avg_cheque"],
+            1.0,
+        )
+        result = result.drop(columns=["location"])
+        return result.reset_index()
+
+
+# ---------------------------------------------------------------------------
+# Loyalty coefficient
+# ---------------------------------------------------------------------------
+
+class LoyaltyCalcer:
+    """Loyalty-related features: purchase regularity and engagement depth."""
+
+    name = "loyalty"
+
+    def __init__(self, date_to: datetime.date):
+        self.date_to = date_to
+
+    def compute(self, engine: Engine) -> pd.DataFrame:
+        receipts = engine.get_table("receipts").copy()
+        receipts["date"] = pd.to_datetime(receipts["date"])
+        dt_to = pd.Timestamp(self.date_to)
+        receipts = receipts.loc[receipts["date"] < dt_to]
+
+        cust = receipts.groupby("customer_id").agg(
+            n_txn=("date", "count"),
+            n_unique_days=("date", "nunique"),
+            first_purchase=("date", "min"),
+            last_purchase=("date", "max"),
+            total_spend=("purchase_sum", "sum"),
+        )
+
+        # Lifespan in days
+        cust["lifespan_days"] = (
+            (cust["last_purchase"] - cust["first_purchase"]).dt.total_seconds() / 86400
+        )
+
+        # Purchase frequency: unique days / lifespan (0-1 scale)
+        cust["purchase_frequency"] = np.where(
+            cust["lifespan_days"] > 0,
+            cust["n_unique_days"] / cust["lifespan_days"],
+            0.0,
+        )
+
+        # Average spend per transaction day
+        cust["spend_per_day"] = np.where(
+            cust["n_unique_days"] > 0,
+            cust["total_spend"] / cust["n_unique_days"],
+            0.0,
+        )
+
+        # Loyalty score: composite of frequency and lifespan
+        cust["loyalty_score"] = cust["purchase_frequency"] * np.log1p(cust["lifespan_days"])
+
+        result = cust[
+            ["n_unique_days", "lifespan_days", "purchase_frequency",
+             "spend_per_day", "loyalty_score"]
+        ].reset_index()
+        return result
+
+
 # ---------------------------------------------------------------------------
 # Registry & pipeline
 # ---------------------------------------------------------------------------
@@ -176,6 +324,9 @@ CALCER_REGISTRY: dict[str, type] = {
     "purchase_trend": PurchaseTrendCalcer,
     "demographics": DemographicsCalcer,
     "campaign_history": CampaignHistoryCalcer,
+    "day_of_week": DayOfWeekCalcer,
+    "avg_city_cheque": AvgCityChequeCalcer,
+    "loyalty": LoyaltyCalcer,
 }
 
 def extract_features(engine: Engine, config: list[dict]) -> pd.DataFrame:
