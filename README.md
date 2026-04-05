@@ -20,6 +20,8 @@ CATE × margin_per_gram > discount_cost + contact_cost
 
 The campaign dataset contains randomized control group assignments, making it possible to estimate CATE directly from observed outcomes.
 
+<img width="632" height="346" alt="image" src="https://github.com/user-attachments/assets/431dd0ef-754a-40cb-a743-323ebe7470ff" />
+
 ---
 
 ## Approach
@@ -36,6 +38,7 @@ Three families of CATE estimators are implemented and benchmarked:
 | **Uplift Tree / RF** | Tree models with a KL-divergence splitting criterion that directly optimizes uplift in each node. Keep in mind that there is no GPU training options for these, which makes their training take A LONG time.|
 
 Each meta-learner is paired with three gradient-boosted tree backends: **LightGBM**, **XGBoost**, and **CatBoost**. Technically, there could be many more combinations (and models used) - feel free to experiment.
+<img width="1369" height="879" alt="image" src="https://github.com/user-attachments/assets/af10cf37-dcdf-4f56-8f42-f7c7ae8d905f" />
 
 ### Evaluation
 
@@ -43,6 +46,7 @@ Two metrics guide model selection and Optuna tuning:
 
 - **Qini coefficient** - area under the Qini curve minus the random baseline. Primary tuning objective.
 - **Uplift@K** - actual ATE in the top-K fraction ranked by predicted uplift. Used for business-level validation.
+<img width="782" height="351" alt="image" src="https://github.com/user-attachments/assets/3f0eb2bc-7eff-4992-b661-60466f5e0cd9" />
 
 ---
 
