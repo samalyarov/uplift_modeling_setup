@@ -1,6 +1,6 @@
 {
-    "random_state": 42,
-    "date_to": "2019-03-20",
+    "random_state": 69,
+    "date_to": "101",
     "extract": "serving_extract_config.json",
     "transform": [
         {
@@ -16,6 +16,6 @@
     "selection": {
         "score_column": "uplift_score",
         "threshold": 0.0,
-        "description": "Select clients with positive predicted CATE (uplift_score > 0)"
+        "description": "Select clients with positive expected net profit: CATE * MARGIN_PER_GRAM - CONTACT_COST - DISCOUNT_USD > 0"
     }
 }

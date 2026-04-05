@@ -1,5 +1,5 @@
 """
-CLI entry point for the Cunning Fox campaign application.
+CLI entry point for the Smart Reach campaign application.
 
 Usage (one-shot run):
     python run_campaign.py
@@ -15,13 +15,19 @@ Usage (custom parameters):
 """
 
 import argparse
+import sys
+
+# MLflow prints emoji characters when finishing a run; force UTF-8 so it
+# doesn't blow up on Windows terminals that default to cp1252.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from src.campaign_flow import run_campaign
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="Cunning Fox Campaign",
+        prog="Smart Reach Campaign",
         description="Run the uplift-targeting campaign pipeline",
     )
     parser.add_argument(
@@ -43,7 +49,7 @@ def main():
 
     if args.serve:
         run_campaign.serve(
-            name="cunning_fox_deployment",
+            name="smart_reach_deployment",
             parameters=params,
         )
     else:

@@ -3,6 +3,9 @@ Feature extraction: compute features from raw tables
 
 Each calcer is a class with a 'compute(engine) -> pd.DataFrame' method.
 All calcers produce a DataFrame keyed by 'customer_id'
+
+Dates in this dataset are INTEGER day-numbers (0, 1, 2, …), NOT calendar dates.
+All windowing and comparisons use plain integer arithmetic.
 """
 
 from __future__ import annotations
@@ -15,6 +18,37 @@ import pandas as pd
 
 from . import Engine
 
+
+def _coerce_date(val) -> int:
+    """Accept int or integer-string and return an integer day-number.
+
+    Dates in this dataset are plain integers (0, 1, 2, …), not calendar dates.
+    If you see a TypeError here it means you passed a datetime.date or Timestamp,
+    which happens when Cell 8 still calls pd.to_datetime() on the campaign date.
+    Fix: set  campaign_date = int(campaigns['date'].min())  and
+              FEATURE_DATE  = campaign_date - 1
+    """
+    if isinstance(val, int):
+        return val
+    if isinstance(val, np.integer):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            return int(val)
+        except ValueError:
+            raise ValueError(
+                f"date_to must be an integer day-number string (e.g. '101'), "
+                f"got: {val!r}.  Do not pass calendar-date strings."
+            )
+    if isinstance(val, (datetime.date, datetime.datetime, pd.Timestamp)):
+        raise TypeError(
+            f"date_to must be an integer day-number, not {type(val).__name__}.\n"
+            f"In Cell 8 use:  campaign_date = int(campaigns['date'].min())\n"
+            f"In Cell 10 use: FEATURE_DATE  = campaign_date - 1"
+        )
+    return int(val)
+
+
 # ---------------------------------------------------------------------------
 # Receipt-based features
 # ---------------------------------------------------------------------------
@@ -24,16 +58,14 @@ class ReceiptsAggCalcer:
 
     name = "receipts_agg"
 
-    def __init__(self, delta: int, date_to: datetime.date):
+    def __init__(self, delta: int, date_to: int):
         self.delta = delta
-        self.date_to = date_to
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        receipts = engine.get_table("receipts").copy()
-        receipts["date"] = pd.to_datetime(receipts["date"])
-
-        dt_to = pd.Timestamp(self.date_to)
-        dt_from = dt_to - pd.Timedelta(days=self.delta)
+        receipts = engine.get_table("receipts")
+        dt_to = self.date_to
+        dt_from = dt_to - self.delta
         mask = (receipts["date"] >= dt_from) & (receipts["date"] < dt_to)
         df = receipts.loc[mask]
 
@@ -58,14 +90,11 @@ class ReceiptsAggCalcer:
         # Derived time features
         agg["mean_time_interval" + suffix] = np.where(
             agg["txn_count"] > 1,
-            (agg["date_max"] - agg["date_min"]).dt.total_seconds()
-            / (24 * 3600)
+            (agg["date_max"] - agg["date_min"]).astype(float)
             / (agg["txn_count"] - 1),
-            np.nan
+            np.nan,
         )
-        agg["recency" + suffix] = (
-            (dt_to - agg["date_max"]).dt.total_seconds() / (24 * 3600)
-        )
+        agg["recency" + suffix] = (dt_to - agg["date_max"]).astype(float)
 
         # Rename columns with suffix
         rename = {
@@ -77,58 +106,60 @@ class ReceiptsAggCalcer:
         agg = agg.rename(columns=rename)
         agg = agg.drop(columns=["date_min", "date_max"])
         return agg
-    
+
+
 class RecencyCalcer:
     """Time (in days) since the very last purchase before 'date_to'"""
 
     name = "recency_global"
 
-    def __init__(self, date_to: datetime.date):
-        self.date_to = date_to
+    def __init__(self, date_to: int):
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        receipts = engine.get_table("receipts").copy()
-        receipts["date"] = pd.to_datetime(receipts["date"])
-        dt_to = pd.Timestamp(self.date_to)
-        receipts = receipts.loc[receipts["date"] < dt_to]
+        receipts = engine.get_table("receipts")
+        dt_to = self.date_to
+        before = receipts.loc[receipts["date"] < dt_to]
 
-        last_date = receipts.groupby("customer_id")["date"].max().reset_index()
+        last_date = before.groupby("customer_id")["date"].max().reset_index()
         last_date["days_since_last_purchase"] = (
-            (dt_to - last_date["date"]).dt.total_seconds() / (24 * 3600)
-        )
+            dt_to - last_date["date"]
+        ).astype(float)
 
         return last_date[["customer_id", "days_since_last_purchase"]]
-    
+
+
 class PurchaseTrendCalcer:
     """Ratio of recent spend to older spend - captures trajectory"""
 
     name = "purchase_trend"
 
-    def __init__(self, delta_short: int, delta_long: int, date_to: datetime.date):
+    def __init__(self, delta_short: int, delta_long: int, date_to: int):
         self.delta_short = delta_short
         self.delta_long = delta_long
-        self.date_to = date_to
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        receipts = engine.get_table("receipts").copy()
-        receipts["date"] = pd.to_datetime(receipts["date"])
-        dt_to = pd.Timestamp(self.date_to)
+        receipts = engine.get_table("receipts")
+        dt_to = self.date_to
 
         def _sum_in_window(delta):
-            dt_from = dt_to - pd.Timedelta(days=delta)
+            dt_from = dt_to - delta
             mask = (receipts["date"] >= dt_from) & (receipts["date"] < dt_to)
             return receipts.loc[mask].groupby("customer_id")["purchase_sum"].sum()
-        
+
+        suffix = f"__{self.delta_short}v{self.delta_long}"
         short = _sum_in_window(self.delta_short).rename("spend_short")
         long = _sum_in_window(self.delta_long).rename("spend_long")
         merged = pd.merge(short, long, on="customer_id", how="outer").fillna(0)
-        merged["spend_trend_ratio"] = np.where(
+        col_name = f"spend_trend_ratio{suffix}"
+        merged[col_name] = np.where(
             merged["spend_long"] > 0,
             merged["spend_short"] / merged["spend_long"],
             0.0,
         )
-        return merged[["spend_trend_ratio"]].reset_index()
-    
+        return merged[[col_name]].reset_index()
+
 
 # ---------------------------------------------------------------------------
 # Demographics
@@ -141,7 +172,8 @@ class DemographicsCalcer:
 
     def compute(self, engine: Engine) -> pd.DataFrame:
         return engine.get_table("customers")[["customer_id", "age", "location"]]
-    
+
+
 # ---------------------------------------------------------------------------
 # Campaign history features
 # ---------------------------------------------------------------------------
@@ -154,13 +186,12 @@ class CampaignHistoryCalcer:
 
     name = "campaign_history"
 
-    def __init__(self, date_to: datetime.date):
-        self.date_to = date_to
+    def __init__(self, date_to: int):
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        campaigns = engine.get_table("campaigns").copy()
-        campaigns["date"] = pd.to_datetime(campaigns["date"])
-        dt_to = pd.Timestamp(self.date_to)
+        campaigns = engine.get_table("campaigns")
+        dt_to = self.date_to
         past = campaigns.loc[campaigns["date"] < dt_to]
 
         agg = past.groupby("customer_id").agg(
@@ -171,7 +202,7 @@ class CampaignHistoryCalcer:
 
 
 # ---------------------------------------------------------------------------
-# Day-of-week features
+# Day-of-week features  (uses date modulo 7)
 # ---------------------------------------------------------------------------
 
 class DayOfWeekCalcer:
@@ -179,20 +210,18 @@ class DayOfWeekCalcer:
 
     name = "day_of_week"
 
-    def __init__(self, date_to: datetime.date):
-        self.date_to = date_to
+    def __init__(self, date_to: int):
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        receipts = engine.get_table("receipts").copy()
-        receipts["date"] = pd.to_datetime(receipts["date"])
-        dt_to = pd.Timestamp(self.date_to)
-        receipts = receipts.loc[receipts["date"] < dt_to]
+        receipts = engine.get_table("receipts")
+        before = receipts.loc[receipts["date"] < self.date_to].copy()
 
-        receipts["dow"] = receipts["date"].dt.dayofweek  # 0=Mon, 6=Sun
+        before["dow"] = before["date"] % 7  # 0-6 pseudo day-of-week
 
         # Share of purchases per day of week
         dow_counts = (
-            receipts.groupby(["customer_id", "dow"])
+            before.groupby(["customer_id", "dow"])
             .size()
             .unstack(fill_value=0)
         )
@@ -201,14 +230,14 @@ class DayOfWeekCalcer:
         dow_share.columns = [f"dow_share_{int(c)}" for c in dow_share.columns]
 
         # Most frequent purchase day
-        mode_dow = receipts.groupby("customer_id")["dow"].agg(
+        mode_dow = before.groupby("customer_id")["dow"].agg(
             lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else -1
         ).rename("mode_dow")
 
-        # Weekend share (Sat=5, Sun=6)
-        receipts["is_weekend"] = receipts["dow"].isin([5, 6]).astype(int)
+        # Weekend share (days 5, 6)
+        before["is_weekend"] = before["dow"].isin([5, 6]).astype(int)
         weekend_share = (
-            receipts.groupby("customer_id")["is_weekend"]
+            before.groupby("customer_id")["is_weekend"]
             .mean()
             .rename("weekend_purchase_share")
         )
@@ -226,18 +255,16 @@ class AvgCityChequeCalcer:
 
     name = "avg_city_cheque"
 
-    def __init__(self, date_to: datetime.date):
-        self.date_to = date_to
+    def __init__(self, date_to: int):
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        receipts = engine.get_table("receipts").copy()
+        receipts = engine.get_table("receipts")
         customers = engine.get_table("customers")[["customer_id", "location"]].copy()
-        receipts["date"] = pd.to_datetime(receipts["date"])
-        dt_to = pd.Timestamp(self.date_to)
-        receipts = receipts.loc[receipts["date"] < dt_to]
+        before = receipts.loc[receipts["date"] < self.date_to]
 
         # Merge receipts with customer location
-        r = receipts.merge(customers, on="customer_id", how="left")
+        r = before.merge(customers, on="customer_id", how="left")
 
         # City-level average cheque
         city_avg = r.groupby("location")["purchase_sum"].mean().rename("city_avg_cheque")
@@ -268,16 +295,14 @@ class LoyaltyCalcer:
 
     name = "loyalty"
 
-    def __init__(self, date_to: datetime.date):
-        self.date_to = date_to
+    def __init__(self, date_to: int):
+        self.date_to = _coerce_date(date_to)
 
     def compute(self, engine: Engine) -> pd.DataFrame:
-        receipts = engine.get_table("receipts").copy()
-        receipts["date"] = pd.to_datetime(receipts["date"])
-        dt_to = pd.Timestamp(self.date_to)
-        receipts = receipts.loc[receipts["date"] < dt_to]
+        receipts = engine.get_table("receipts")
+        before = receipts.loc[receipts["date"] < self.date_to]
 
-        cust = receipts.groupby("customer_id").agg(
+        cust = before.groupby("customer_id").agg(
             n_txn=("date", "count"),
             n_unique_days=("date", "nunique"),
             first_purchase=("date", "min"),
@@ -287,8 +312,8 @@ class LoyaltyCalcer:
 
         # Lifespan in days
         cust["lifespan_days"] = (
-            (cust["last_purchase"] - cust["first_purchase"]).dt.total_seconds() / 86400
-        )
+            cust["last_purchase"] - cust["first_purchase"]
+        ).astype(float)
 
         # Purchase frequency: unique days / lifespan (0-1 scale)
         cust["purchase_frequency"] = np.where(
@@ -336,7 +361,7 @@ def extract_features(engine: Engine, config: list[dict]) -> pd.DataFrame:
     Config format::
 
         [
-            {"name": "receipts_agg", "args": {"delta": 60, "date_to": "2019-03-19"}},
+            {"name": "receipts_agg", "args": {"delta": 60, "date_to": 101}},
             {"name": "demographics", "args": {}},
             ...
         ]
@@ -354,11 +379,12 @@ def extract_features(engine: Engine, config: list[dict]) -> pd.DataFrame:
     return result
 
 def _parse_args(args: dict) -> dict:
-    """Auto-convert date strings to datetime.date objects"""
+    """Keep date values as-is (they should be ints). Convert date strings to int if needed."""
     out = {}
     for k, v in args.items():
         if isinstance(v, str) and k.startswith("date"):
-            out[k] = datetime.datetime.strptime(v, "%Y-%m-%d").date()
+            # Serving config injects date strings — convert to int
+            out[k] = int(v)
         else:
             out[k] = v
     return out

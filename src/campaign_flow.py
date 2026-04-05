@@ -7,7 +7,7 @@ Pipeline stages (Prefect tasks)
 2. extract_features     — compute features from transactional history
 3. transform_features   — apply the sklearn preprocessing pipeline
 4. score_clients        — apply the trained uplift model
-5. select_clients       — pick clients with positive predicted CATE
+5. select_clients       — pick clients with positive expected net profit
 6. export_submission    — write the final CSV for submission
 
 The @flow `run_campaign` orchestrates all tasks and is the main entry point.
@@ -36,8 +36,8 @@ from src.utils import load_json, load_pickle
 
 PRICE_PER_GRAM = 80
 COST_PER_GRAM = 52
-DISCOUNT_ORENS = 40
-RAVEN_COST = 1
+DISCOUNT_USD = 40
+CONTACT_COST = 1
 MARGIN_PER_GRAM = PRICE_PER_GRAM - COST_PER_GRAM # default - 28
 
 RETRIES_PER_TASK = 1 # 1 retry is cheap, but helps with accidental crashes immensely
@@ -98,14 +98,22 @@ def select_clients_task(
     score_col: str,
     threshold: float,
 ) -> pd.DataFrame:
-    """Select clients whose predicted CATE exceeds the threshold"""
+    """Select clients whose predicted CATE exceeds the threshold.
+
+    The model is trained on target_profit (campaign costs already baked in),
+    so CATE is in net-profit units (dollars).  A customer is profitable to target
+    when CATE > 0 — no additional cost formula is applied here because that
+    would double-count the discounts and communication cost.
+    """
     logger = get_run_logger()
-    selected = features.loc[features[score_col] > threshold, ["customer_id"]].copy()
+    cate = features[score_col]
+    selected = features.loc[cate > threshold, ["customer_id"]].copy()
     logger.info(
-        "Selected %d / %d clients (%.1f%%)",
-        len(selected), 
+        "Selected %d / %d clients (%.1f%%)  |  Mean CATE (selected) = %.4f dollars",
+        len(selected),
         len(features),
         len(selected) / len(features) * 100,
+        cate[cate > threshold].mean() if (cate > threshold).any() else 0.0,
     )
     return selected
 
@@ -161,7 +169,7 @@ def _build_transform_pipeline(
 # Main Prefect Flow
 # ---------------------------------------------------------------------------
 
-@flow(name="cunning-fox-campaign", log_prints=True)
+@flow(name="smart-reach-campaign", log_prints=True)
 def run_campaign(
     config_path: str = "configs/campaign.json",
     system_config_path: str = "configs/system.json",
@@ -169,7 +177,7 @@ def run_campaign(
     output_path: str = "runs/submission.csv",
 ) -> pd.DataFrame:
     """
-    End-to-end uplift campaign pipeline for the Cunning Fox.
+    End-to-end uplift campaign pipeline for Smart Reach.
 
     Parameters
     ----------
@@ -197,11 +205,11 @@ def run_campaign(
     # ----- MLflow setup -----
     mlflow_cfg = sys_cfg.get("mlflow", {})
     tracking_uri = mlflow_cfg.get("tracking_uri", "mlruns")
-    experiment_name = mlflow_cfg.get("experiment_name", "cunning-fox-uplift")
+    experiment_name = mlflow_cfg.get("experiment_name", "smart-reach-uplift")
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
-    logger.info("=== Cunning Fox Campaign ===")
+    logger.info("=== Smart Reach Campaign ===")
     logger.info("Date: %s", run_date)
     logger.info("MLflow tracking: %s / experiment: %s", tracking_uri, experiment_name)
 
@@ -240,12 +248,17 @@ def run_campaign(
         saved_path = export_submission_task(selected, output_path)
 
         # log metrics to MLflow
+        # CATE is in net-profit units (dollars) because target_profit has costs baked in.
         score_col = selection_cfg["score_column"]
         if score_col in features.columns:
-            mlflow.log_metric("mean_uplift", float(features[score_col].mean()))
-            mlflow.log_metric("median_uplift", float(features[score_col].median()))
-            mlflow.log_metric("std_uplift", float(features[score_col].std()))
-            mlflow.log_metric("pct_positive", float((features[score_col] > 0).mean() * 100))
+            cate = features[score_col]
+            threshold = selection_cfg["threshold"]
+            mlflow.log_metric("mean_cate_dollars", float(cate.mean()))
+            mlflow.log_metric("median_cate_dollars", float(cate.median()))
+            mlflow.log_metric("std_cate_dollars", float(cate.std()))
+            mlflow.log_metric("pct_positive_cate", float((cate > 0).mean() * 100))
+            mlflow.log_metric("total_expected_profit_selected",
+                              float(cate[cate > threshold].sum()))
         mlflow.log_metric("n_total", len(features))
         mlflow.log_metric("n_selected", len(selected))
         mlflow.log_metric("selection_rate", len(selected) / len(features) * 100)
@@ -262,7 +275,7 @@ def run_campaign(
         f"- **Total clients scored**: {len(features)}\n"
         f"- **Clients selected**: {len(selected)}\n"
         f"- **Selection rate**: {len(selected)/len(features)*100:.1f}%\n"
-        f"- **Score threshold**: {selection_cfg['threshold']}\n"
+        f"- **CATE threshold**: {selection_cfg['threshold']} dollars\n"
         f"- **Output**: `{output_path}`\n"
         f"- **MLflow run**: `{ml_run.info.run_id}`\n"
     )

@@ -2,7 +2,7 @@
   {
     "name": "receipts_agg",
     "args": {
-      "delta": 60
+      "delta": 7
     }
   },
   {
@@ -14,7 +14,31 @@
   {
     "name": "receipts_agg",
     "args": {
-      "delta": 250
+      "delta": 30
+    }
+  },
+  {
+    "name": "receipts_agg",
+    "args": {
+      "delta": 60
+    }
+  },
+  {
+    "name": "receipts_agg",
+    "args": {
+      "delta": 90
+    }
+  },
+  {
+    "name": "receipts_agg",
+    "args": {
+      "delta": 180
+    }
+  },
+  {
+    "name": "receipts_agg",
+    "args": {
+      "delta": 365
     }
   },
   {
@@ -24,8 +48,36 @@
   {
     "name": "purchase_trend",
     "args": {
+      "delta_short": 7,
+      "delta_long": 30
+    }
+  },
+  {
+    "name": "purchase_trend",
+    "args": {
+      "delta_short": 15,
+      "delta_long": 60
+    }
+  },
+  {
+    "name": "purchase_trend",
+    "args": {
       "delta_short": 30,
       "delta_long": 120
+    }
+  },
+  {
+    "name": "purchase_trend",
+    "args": {
+      "delta_short": 30,
+      "delta_long": 365
+    }
+  },
+  {
+    "name": "purchase_trend",
+    "args": {
+      "delta_short": 90,
+      "delta_long": 365
     }
   },
   {
